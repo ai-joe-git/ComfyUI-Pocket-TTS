@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-simple-pocket-tts"
 description = "Lightweight CPU-based Text-to-Speech nodes for ComfyUI. Fast, efficient TTS running at 6x real-time on CPU without GPU. Supports voice cloning and 8 built-in voices."
-version = "1.0.1"
+version = "1.0.2"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 dependencies = []
