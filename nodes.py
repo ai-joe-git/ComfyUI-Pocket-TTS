@@ -1,13 +1,9 @@
 """
-ComfyUI-Pocket-TTS - Simple CPU-based TTS nodes
-FIXED: Simple structure matching Qwen3-TTS exactly
+ComfyUI-Pocket-TTS - FINAL FIX for WAV writing
 """
 
 import torch
-import torchaudio
 import numpy as np
-import os
-import tempfile
 
 print("\n" + "="*70)
 print("🎙️ ComfyUI-Pocket-TTS - Loading...")
@@ -21,19 +17,32 @@ try:
 except ImportError as e:
     POCKET_TTS_AVAILABLE = False
     print(f"❌ [Pocket-TTS] Import Error: {e}")
-    print("   Install with: pip install pocket-tts")
     TTSModel = None
 
 # Global cache
-_model_cache = None
-_voice_cache = {}
+_MODEL_CACHE = {}
 
 # Built-in voices
 VOICES = ["alba", "marius", "javert", "jean", "fantine", "cosette", "eponine", "azelma"]
 
 
+def load_model():
+    """Load model with caching"""
+    global _MODEL_CACHE
+
+    if "pocket_tts" in _MODEL_CACHE:
+        return _MODEL_CACHE["pocket_tts"]
+
+    print("🔄 Loading Pocket TTS model...")
+    model = TTSModel.load_model()
+    print("✅ Model loaded!")
+
+    _MODEL_CACHE["pocket_tts"] = model
+    return model
+
+
 class PocketTTSGenerate:
-    """Generate speech with built-in voices (Simple)"""
+    """Generate speech"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -48,51 +57,41 @@ class PocketTTSGenerate:
         }
 
     RETURN_TYPES = ("AUDIO",)
+    RETURN_NAMES = ("audio",)
     FUNCTION = "generate"
     CATEGORY = "audio/Pocket-TTS"
 
     def generate(self, text, voice):
-        global _model_cache, _voice_cache
-
         if not POCKET_TTS_AVAILABLE:
-            raise RuntimeError("❌ pocket-tts not installed. Run: pip install pocket-tts")
+            raise RuntimeError("pocket-tts not installed")
 
-        # Load model once
-        if _model_cache is None:
-            print("🔄 Loading Pocket TTS model...")
-            _model_cache = TTSModel.load_model()
-            print("✅ Model loaded!")
+        if not text:
+            raise RuntimeError("Text is required")
 
-        model = _model_cache
+        model = load_model()
 
-        # Get voice state
-        cache_key = f"voice_{voice}"
-        if cache_key not in _voice_cache:
-            print(f"🎤 Loading voice: {voice}")
-            voice_prompt = f"hf://kyutai/tts-voices/{voice}/casual.wav"
-            _voice_cache[cache_key] = model.get_state_for_audio_prompt(voice_prompt)
-
-        voice_state = _voice_cache[cache_key]
+        # Get voice
+        voice_prompt = f"hf://kyutai/tts-voices/{voice}/casual.wav"
+        voice_state = model.get_state_for_audio_prompt(voice_prompt)
 
         # Generate
-        print(f"🎙️ Generating: {len(text)} chars with voice '{voice}'")
         audio = model.generate_audio(voice_state, text)
 
         # Convert to ComfyUI format
-        waveform = audio.unsqueeze(0).cpu()  # [1, samples]
+        waveform = audio.unsqueeze(0).unsqueeze(0)
 
         return ({"waveform": waveform, "sample_rate": model.sample_rate},)
 
 
 class PocketTTSClone:
-    """Clone voice from audio input"""
+    """Clone voice"""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "audio": ("AUDIO",),  # AUDIO INPUT - like Qwen3-TTS!
-                "text": ("STRING", {
+                "ref_audio": ("AUDIO",),
+                "target_text": ("STRING", {
                     "default": "Hello world, this is a test.",
                     "multiline": True
                 }),
@@ -100,52 +99,95 @@ class PocketTTSClone:
         }
 
     RETURN_TYPES = ("AUDIO",)
-    FUNCTION = "generate_clone"
+    RETURN_NAMES = ("audio",)
+    FUNCTION = "generate"
     CATEGORY = "audio/Pocket-TTS"
 
-    def generate_clone(self, audio, text):
-        global _model_cache
+    def audio_tensor_to_numpy(self, audio_tensor):
+        """Convert ComfyUI audio to numpy"""
+        waveform = None
+        sr = None
 
+        # Handle dict format
+        if isinstance(audio_tensor, dict):
+            if "waveform" in audio_tensor:
+                waveform = audio_tensor.get("waveform")
+                sr = audio_tensor.get("sample_rate") or audio_tensor.get("sr")
+            elif "data" in audio_tensor:
+                waveform = audio_tensor.get("data")
+                sr = audio_tensor.get("sampling_rate")
+
+        # Convert to numpy
+        if waveform is not None:
+            if isinstance(waveform, torch.Tensor):
+                waveform = waveform.cpu().numpy()
+
+            # Remove all extra dimensions
+            while waveform.ndim > 1:
+                if waveform.shape[0] == 1:
+                    waveform = waveform.squeeze(0)
+                elif waveform.shape[-1] == 1:
+                    waveform = waveform.squeeze(-1)
+                else:
+                    # Multi-channel - average to mono
+                    waveform = np.mean(waveform, axis=0 if waveform.shape[0] <= 2 else -1)
+
+            waveform = waveform.astype(np.float32)
+
+        if waveform is None or sr is None or waveform.size == 0:
+            raise RuntimeError("Failed to parse reference audio")
+
+        return waveform, int(sr)
+
+    def generate(self, ref_audio, target_text):
         if not POCKET_TTS_AVAILABLE:
-            raise RuntimeError("❌ pocket-tts not installed. Run: pip install pocket-tts")
+            raise RuntimeError("pocket-tts not installed")
 
-        # Load model once
-        if _model_cache is None:
-            print("🔄 Loading Pocket TTS model...")
-            _model_cache = TTSModel.load_model()
-            print("✅ Model loaded!")
+        if not target_text:
+            raise RuntimeError("Text is required")
 
-        model = _model_cache
+        model = load_model()
 
-        # Get audio from ComfyUI AUDIO type
-        waveform = audio["waveform"].squeeze(0)  # [samples] or [channels, samples]
-        sample_rate = audio["sample_rate"]
+        # Convert audio
+        wav_np, sr = self.audio_tensor_to_numpy(ref_audio)
 
-        # Handle stereo to mono
-        if waveform.dim() == 2:
-            waveform = waveform.mean(dim=0)
+        print(f"📊 Audio shape: {wav_np.shape}, dtype: {wav_np.dtype}, sr: {sr}")
 
-        # Save to temp file (Pocket TTS needs file path)
+        # Validate
+        if wav_np.ndim != 1:
+            raise RuntimeError(f"Audio must be 1D, got shape {wav_np.shape}")
+
+        if wav_np.size < 100:
+            raise RuntimeError(f"Audio too short: {wav_np.size} samples")
+
+        # Write WAV file with scipy (more reliable)
+        import tempfile
+        import os
+        from scipy.io import wavfile
+
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
-            torchaudio.save(tmp_path, waveform.unsqueeze(0), sample_rate)
 
         try:
-            # Get voice state from audio
-            print(f"🎤 Analyzing reference audio...")
+            # Convert to int16 for WAV
+            wav_int16 = (wav_np * 32767).astype(np.int16)
+
+            # Write with scipy
+            wavfile.write(tmp_path, sr, wav_int16)
+
+            # Get voice state
             voice_state = model.get_state_for_audio_prompt(tmp_path)
 
-            # Generate
-            print(f"🎙️ Generating: {len(text)} chars with cloned voice")
-            audio_out = model.generate_audio(voice_state, text)
+            # Generate with inference mode disabled
+            with torch.inference_mode(False):
+                audio = model.generate_audio(voice_state, target_text)
 
             # Convert to ComfyUI format
-            waveform_out = audio_out.unsqueeze(0).cpu()
+            waveform = audio.unsqueeze(0).unsqueeze(0)
 
-            return ({"waveform": waveform_out, "sample_rate": model.sample_rate},)
+            return ({"waveform": waveform, "sample_rate": model.sample_rate},)
 
         finally:
-            # Cleanup temp file
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
@@ -162,5 +204,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 }
 
 print("="*70)
-print("✅ Pocket TTS nodes registered (FIXED)")
+print("✅ Pocket TTS nodes registered")
 print("="*70 + "\n")
