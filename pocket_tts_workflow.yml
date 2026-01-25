@@ -1,0 +1,28 @@
+name: Publish to ComfyUI Registry
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install comfy-cli
+        run: pip install comfy-cli
+
+      - name: Display environment
+        run: comfy --skip-prompt --no-enable-telemetry env
+
+      - name: Publish to registry
+        uses: Comfy-Org/publish-node-action@v1
+        with:
+          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
