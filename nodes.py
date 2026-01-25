@@ -1,5 +1,5 @@
 """
-ComfyUI-Pocket-TTS - FINAL FIX for WAV writing
+ComfyUI-Pocket-TTS - Text-to-Speech nodes using Kyutai's Pocket TTS
 """
 
 import torch
@@ -42,7 +42,7 @@ def load_model():
 
 
 class PocketTTSGenerate:
-    """Generate speech"""
+    """Generate speech with built-in voices"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -70,12 +70,14 @@ class PocketTTSGenerate:
 
         model = load_model()
 
-        # Get voice
-        voice_prompt = f"hf://kyutai/tts-voices/{voice}/casual.wav"
-        voice_state = model.get_state_for_audio_prompt(voice_prompt)
+        # Use voice name directly
+        print(f"🎤 Using voice: {voice}")
+        voice_state = model.get_state_for_audio_prompt(voice)
 
-        # Generate
-        audio = model.generate_audio(voice_state, text)
+        # Generate with inference mode disabled
+        print(f"🎙️ Generating: {len(text)} chars")
+        with torch.inference_mode(False):
+            audio = model.generate_audio(voice_state, text)
 
         # Convert to ComfyUI format
         waveform = audio.unsqueeze(0).unsqueeze(0)
@@ -84,7 +86,7 @@ class PocketTTSGenerate:
 
 
 class PocketTTSClone:
-    """Clone voice"""
+    """Clone voice from reference audio"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -160,7 +162,7 @@ class PocketTTSClone:
         if wav_np.size < 100:
             raise RuntimeError(f"Audio too short: {wav_np.size} samples")
 
-        # Write WAV file with scipy (more reliable)
+        # Write WAV file
         import tempfile
         import os
         from scipy.io import wavfile
