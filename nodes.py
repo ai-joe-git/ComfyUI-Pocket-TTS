@@ -25,19 +25,37 @@ _MODEL_CACHE = {}
 # Built-in voices
 VOICES = ["alba", "marius", "javert", "jean", "fantine", "cosette", "eponine", "azelma"]
 
+# Pocket-TTS v2 language models.
+# Portuguese support requires a recent pocket-tts package version.
+LANGUAGES = [
+    "english",
+    "english_2026-01",
+    "english_2026-04",
+    "italian",
+    "italian_24l",
+    "german",
+    "german_24l",
+    "spanish",
+    "spanish_24l",
+    "portuguese",
+    "portuguese_24l",
+    "french_24l",
+]
 
-def load_model():
-    """Load model with caching"""
+
+def load_model(language="english"):
+    """Load Pocket-TTS model with caching per language."""
     global _MODEL_CACHE
 
-    if "pocket_tts" in _MODEL_CACHE:
-        return _MODEL_CACHE["pocket_tts"]
+    cache_key = f"pocket_tts::{language}"
+    if cache_key in _MODEL_CACHE:
+        return _MODEL_CACHE[cache_key]
 
-    print("🔄 Loading Pocket TTS model...")
-    model = TTSModel.load_model()
+    print(f"🔄 Loading Pocket TTS model: {language}")
+    model = TTSModel.load_model(language=language)
     print("✅ Model loaded!")
 
-    _MODEL_CACHE["pocket_tts"] = model
+    _MODEL_CACHE[cache_key] = model
     return model
 
 
@@ -53,6 +71,7 @@ class PocketTTSGenerate:
                     "multiline": True
                 }),
                 "voice": (VOICES, {"default": "alba"}),
+                "language": (LANGUAGES, {"default": "english"}),
             },
         }
 
@@ -61,17 +80,17 @@ class PocketTTSGenerate:
     FUNCTION = "generate"
     CATEGORY = "audio/Pocket-TTS"
 
-    def generate(self, text, voice):
+    def generate(self, text, voice, language):
         if not POCKET_TTS_AVAILABLE:
             raise RuntimeError("pocket-tts not installed")
 
         if not text:
             raise RuntimeError("Text is required")
 
-        model = load_model()
+        model = load_model(language)
 
         # Use voice name directly
-        print(f"🎤 Using voice: {voice}")
+        print(f"🎤 Using voice: {voice} | language: {language}")
         voice_state = model.get_state_for_audio_prompt(voice)
 
         # Generate with inference mode disabled
@@ -97,6 +116,7 @@ class PocketTTSClone:
                     "default": "Hello world, this is a test.",
                     "multiline": True
                 }),
+                "language": (LANGUAGES, {"default": "english"}),
             },
         }
 
@@ -141,14 +161,14 @@ class PocketTTSClone:
 
         return waveform, int(sr)
 
-    def generate(self, ref_audio, target_text):
+    def generate(self, ref_audio, target_text, language):
         if not POCKET_TTS_AVAILABLE:
             raise RuntimeError("pocket-tts not installed")
 
         if not target_text:
             raise RuntimeError("Text is required")
 
-        model = load_model()
+        model = load_model(language)
 
         # Convert audio
         wav_np, sr = self.audio_tensor_to_numpy(ref_audio)
@@ -178,6 +198,7 @@ class PocketTTSClone:
             wavfile.write(tmp_path, sr, wav_int16)
 
             # Get voice state
+            print(f"🎤 Cloning voice | language: {language}")
             voice_state = model.get_state_for_audio_prompt(tmp_path)
 
             # Generate with inference mode disabled
